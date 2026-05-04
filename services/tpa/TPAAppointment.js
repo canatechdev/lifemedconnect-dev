@@ -457,16 +457,16 @@ class TPAAppointmentService {
             const formattedCategories = categories.map(category => ({
                 id: category.id,
                 name: category.category_name,
-                type: 'category',
-                rate: '0.00' // Default rate since no insurer mapping
+                type: 'category'
+                // No rate for categories
             }));
 
             // Format tests array
             const formattedTests = tests.map(test => ({
                 id: test.id,
                 name: test.test_name,
-                type: 'test',
-                rate: '0.00' // Default rate since no insurer mapping
+                type: 'test'
+                // No rate for tests
             }));
 
             // Create combined array

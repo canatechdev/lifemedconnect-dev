@@ -170,10 +170,27 @@ router.get('/tests-categories', authenticateTPA, async (req, res) => {
         if (!insurer_name && !center_name) {
             const allData = await TPAAppointmentService.getAllTestsAndCategories();
             
+            // Remove rates from response
+            const testsWithoutRate = allData.tests.map(test => {
+                const { rate, ...testWithoutRate } = test;
+                return testWithoutRate;
+            });
+
+            const categoriesWithoutRate = allData.categories.map(category => {
+                const { rate, ...categoryWithoutRate } = category;
+                return categoryWithoutRate;
+            });
+
+            const allDataWithoutRates = {
+                tests: testsWithoutRate,
+                categories: categoriesWithoutRate,
+                combined: [...testsWithoutRate, ...categoriesWithoutRate]
+            };
+            
             res.json({
                 success: true,
                 message: 'Success',
-                data: allData
+                data: allDataWithoutRates
             });
             return;
         }

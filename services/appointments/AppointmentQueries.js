@@ -607,6 +607,7 @@ async function getTestsAndCategoriesByClientAndInsurer(clientId, insurerId, sear
           AND btr.item_type = 'category'
           AND tc.is_active = 1
           AND tc.is_deleted = 0
+          AND btr.is_deleted = 0
           ${searchCondition}
         ORDER BY tc.category_name ASC
     `;
