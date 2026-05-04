@@ -1,1 +1,0 @@
-import{j as e}from"./ui-libs-E7U3H7o_.js";import{e as n}from"./index-BiaLPLVQ.js";const c=t=>{const{children:a,className:r,adaptiveCardActive:s,type:o,pageContainerReassemble:i}=t;return e.jsx(n.Provider,{value:{adaptiveCardActive:s,pageContainerReassemble:i,type:o},children:e.jsx("div",{className:r,children:a})})};export{c as L};
