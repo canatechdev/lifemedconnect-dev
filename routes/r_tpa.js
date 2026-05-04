@@ -110,18 +110,29 @@ router.get('/tests-categories/:insurerId', authenticateTPA, async (req, res) => 
             insurerId
         );
 
+        // Remove rates from response
+        const testsWithoutRate = data.tests.map(test => {
+            const { rate, ...testWithoutRate } = test;
+            return testWithoutRate;
+        });
+
+        const categoriesWithoutRate = data.categories.map(category => {
+            const { rate, ...categoryWithoutRate } = category;
+            return categoryWithoutRate;
+        });
+
         // Create combined array - type field differentiates test vs category
         const combined = [
-            ...data.tests,
-            ...data.categories
+            ...testsWithoutRate,
+            ...categoriesWithoutRate
         ].sort((a, b) => a.name.localeCompare(b.name));
 
         res.json({
             success: true,
             message: 'Success',
             data: {
-                tests: data.tests,
-                categories: data.categories,
+                tests: testsWithoutRate,
+                categories: categoriesWithoutRate,
                 combined: combined
             }
         });
