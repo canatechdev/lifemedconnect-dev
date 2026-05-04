@@ -1,0 +1,1 @@
+import{j as s}from"./ui-libs-E7U3H7o_.js";import{H as u}from"./isNil-BSAMFo-P.js";import{f as c}from"./index-BiaLPLVQ.js";const i=t=>{const{absolute:o,className:e,resetDefaultClass:a,ref:l,...r}=t,n=c(!a&&"close-button button-press-feedback",o&&"absolute z-10",e);return s.jsx("button",{ref:l,className:n,type:"button",...r,children:s.jsx(u.HiX,{})})};export{i as C};

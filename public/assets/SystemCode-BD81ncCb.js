@@ -1,0 +1,1 @@
+import{j as r}from"./ui-libs-E7U3H7o_.js";const o=({value:t,placeholder:e="Ex: DC/08/0017"})=>r.jsx("input",{type:"text",className:"form-input w-full",value:t||"",placeholder:e,readOnly:!0});export{o as S};

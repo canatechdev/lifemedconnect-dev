@@ -1,0 +1,539 @@
+/**
+ * Appointment CRUD Operations
+ * Handles Create, Read, Update, Delete operations for appointments
+ */
+
+const db = require('../../lib/dbconnection');
+const { generateCustomCode } = require('../../lib/generateCode');
+const logger = require('../../lib/logger');
+
+/**
+ * Safe value handler - returns null for undefined/null/empty values
+ */
+const safe = (value) => {
+    return value === undefined || value === null || value === '' ? null : value;
+};
+
+/**
+ * Update appointment status based on test completion
+ */
+async function updateAppointmentStatus(appointmentId) {
+    const connection = await db.pool.getConnection();
+    try {
+        await connection.beginTransaction();
+        
+        // Get current status before update
+        const [current] = await connection.query(
+            'SELECT status, medical_status FROM appointments WHERE id = ?',
+            [appointmentId]
+        );
+        
+        const [stats] = await connection.query(`
+            SELECT 
+                COUNT(*) as total,
+                SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) as completed
+            FROM appointment_tests 
+            WHERE appointment_id = ?
+        `, [appointmentId]);
+
+        const { total, completed } = stats;
+        let newStatus = 'pending';
+
+        if (completed === total && total > 0) {
+            newStatus = 'completed';
+        } else if (completed > 0) {
+            newStatus = 'partially_completed';
+        }
+
+        await connection.query(
+            'UPDATE appointments SET status = ?, updated_at = NOW() WHERE id = ?',
+            [newStatus, appointmentId]
+        );
+        
+        // Log status history
+        const { logStatusHistory } = require('./AppointmentFlow');
+        await logStatusHistory(appointmentId, {
+            old_status: current[0]?.status || null,
+            new_status: newStatus,
+            old_medical_status: current[0]?.medical_status || null,
+            new_medical_status: current[0]?.medical_status || null,
+            changed_by: 1, // System update
+            change_type: 'auto_status_update',
+            remarks: `Status automatically updated based on test completion: ${completed}/${total} tests completed`,
+            metadata: { total_tests: total, completed_tests: completed }
+        }, connection);
+        
+        await connection.commit();
+    } catch (error) {
+        await connection.rollback();
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+/**
+ * Create new appointment with tests
+ */
+async function createAppointment(row, connection = null) {
+    console.log(' [APPOINTMENT CRUD] createAppointment called');
+    console.log(' [APPOINTMENT CRUD] Row keys:', Object.keys(row || {}));
+    console.log(' [APPOINTMENT CRUD] Has provided connection:', !!connection);
+
+    const useOwnConnection = !connection;
+    const conn = connection || await db.pool.getConnection();
+
+    try {
+        if (useOwnConnection) {
+            console.log(' [APPOINTMENT CRUD] Starting own transaction...');
+            await conn.beginTransaction();
+        } else {
+            console.log(' [APPOINTMENT CRUD] Using provided connection');
+        }
+
+        // check duplicate app no
+        if (row.application_number) {
+            console.log(' [APPOINTMENT CRUD] Checking duplicate application_number...');
+            const [existing] = await conn.query(
+                `SELECT id FROM appointments 
+             WHERE application_number = ? AND is_deleted = 0 
+             LIMIT 1`,
+                [row.application_number]
+            );
+
+            if (existing && existing.length > 0) {
+                throw new Error('An active appointment already exists with this application number.');
+            }
+        }
+
+        // Generate case number if not provided
+        if (!row.case_number) {
+            console.log(' [APPOINTMENT CRUD] Generating case number...');
+            row.case_number = await generateCustomCode({
+                prefix: 'CASE',
+                table: 'appointments',
+                column: 'case_number'
+            });
+        }
+
+        // Enforce amount = 0 when cost type is Credit
+        if (row.cost_type && String(row.cost_type).toLowerCase() === 'credit') {
+            row.amount = 0;
+        }
+
+        const appointmentSql = `
+            INSERT INTO appointments (
+                case_number, application_number, client_id, center_id, other_center_id, insurer_id,
+                customer_first_name, customer_last_name, gender, customer_mobile, customer_alt_mobile, customer_service_no,
+                customer_email, customer_address, state, city, pincode, country,
+                customer_gps_latitude, customer_gps_longitude, customer_landmark,
+                visit_type, customer_category, appointment_date, appointment_time, confirmed_time,
+                status, assigned_technician_id, assigned_at, assigned_by,
+                customer_arrived_at, medical_started_at, medical_completed_at,
+                remarks, cancellation_reason, created_by,
+                cost_type, amount, amount_upload, case_severity,
+                created_at, updated_at, is_active, split_type
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), 1, 'none'
+            )
+        `;
+
+        // Normalize initial main status to a small, lowercase set: pending | in_process | completed
+        let initialStatus = (row.status || '').toString().toLowerCase();
+        if (!['pending', 'in_process', 'completed'].includes(initialStatus)) {
+            initialStatus = 'pending';
+        }
+
+        const appointmentParams = [
+            safe(row.case_number), safe(row.application_number), safe(row.client_id),
+            safe(row.center_id), safe(row.other_center_id), safe(row.insurer_id),
+            safe(row.customer_first_name), safe(row.customer_last_name), safe(row.gender),
+            safe(row.customer_mobile), safe(row.customer_alt_mobile), safe(row.customer_service_no), safe(row.customer_email),
+            safe(row.customer_address), safe(row.state), safe(row.city), safe(row.pincode),
+            safe(row.country), safe(row.customer_gps_latitude), safe(row.customer_gps_longitude),
+            safe(row.customer_landmark), safe(row.visit_type), safe(row.customer_category),
+            safe(row.appointment_date), safe(row.appointment_time), safe(row.confirmed_time),
+            safe(initialStatus), safe(row.assigned_technician_id),
+            safe(row.assigned_at), safe(row.assigned_by), safe(row.customer_arrived_at),
+            safe(row.medical_started_at), safe(row.medical_completed_at), safe(row.remarks),
+            safe(row.cancellation_reason), safe(row.created_by), safe(row.cost_type),
+            safe(row.amount), safe(row.amount_upload), safe(row.case_severity ?? 0)
+        ];
+
+        const [appointmentResult] = await conn.query(appointmentSql, appointmentParams);
+        const appointmentId = appointmentResult.insertId;
+        console.log(' [APPOINTMENT CRUD] Appointment created with ID:', appointmentId);
+
+        if (!appointmentId || typeof appointmentId !== 'number') {
+            throw new Error('Failed to retrieve valid appointment ID');
+        }
+
+        // Insert tests
+        console.log(' [APPOINTMENT CRUD] Processing selected_items:', row.selected_items?.length || 0);
+        if (row.selected_items && Array.isArray(row.selected_items)) {
+            const testSql = `
+                INSERT INTO appointment_tests (
+                    appointment_id, test_id, category_id, rate_type, item_name, rate,
+                    assigned_center_id, assigned_technician_id, visit_subtype, status,
+                    is_completed, created_at, updated_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, NOW(), ?)
+            `;
+
+            for (const item of row.selected_items) {
+                console.log(' [APPOINTMENT CRUD] Adding item:', item.name, item.type);
+                let assignedCenterId = null;
+
+                if (item.assigned_center_id) {
+                    assignedCenterId = item.assigned_center_id;
+                } else if (item.assigned_to === 'center2' && row.other_center_id) {
+                    assignedCenterId = row.other_center_id;
+                } else {
+                    assignedCenterId = row.center_id;
+                }
+
+                const visitSubtype = item.visit_subtype || 'center';
+                const assignedTechnicianId = item.assigned_technician_id || null;
+
+                const testParams = [
+                    appointmentId,
+                    item.type === 'test' ? item.id : null,
+                    item.type === 'category' ? item.id : null,
+                    item.type,
+                    item.name,
+                    item.rate,
+                    assignedCenterId,
+                    assignedTechnicianId,
+                    visitSubtype,
+                    row.created_by
+                ];
+                await conn.query(testSql, testParams);
+            }
+        }
+
+        // Update split_type if needed
+        if (row.visit_type === 'Both' && row.other_center_id) {
+            console.log(' [APPOINTMENT CRUD] Updating split_type...');
+            await conn.query(
+                `UPDATE appointments SET split_type = 'split' WHERE id = ?`,
+                [appointmentId]
+            );
+        }
+
+        if (useOwnConnection) {
+            console.log(' [APPOINTMENT CRUD] Committing own transaction...');
+            await conn.commit();
+        }
+        console.log(' [APPOINTMENT CRUD] Appointment creation completed successfully');
+        return appointmentId;
+    } catch (error) {
+        console.log(' [APPOINTMENT CRUD] Error during appointment creation:', error);
+        if (useOwnConnection) {
+            await conn.rollback();
+        }
+        logger.error('createAppointment error:', error);
+        throw error;
+    } finally {
+        if (useOwnConnection) {
+            console.log(' [APPOINTMENT CRUD] Releasing own connection...');
+            conn.release();
+        }
+    }
+}
+
+/**
+ * List appointments with pagination and search
+ */
+async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id', sortOrder = 'DESC', customerCategory = '', month = '', year = '', visitType = '', status = '', medicalStatus = '', qcStatus = '', userId = null, userRole = null }) {
+    const searchColumns = ['case_number', 'application_number', 'customer_first_name', 'customer_last_name', 'customer_mobile', 'home_center.center_name', 'other_center.center_name'];
+    const searchParams = [];
+    const conditions = [];
+
+    if (search && search.trim() !== '') {
+        const searchConditions = [
+            'appointments.case_number LIKE ?',
+            'appointments.application_number LIKE ?',
+            'appointments.customer_first_name LIKE ?',
+            'appointments.customer_last_name LIKE ?',
+            'appointments.customer_mobile LIKE ?',
+            'home_center.center_name LIKE ?',
+            'other_center.center_name LIKE ?'
+        ].join(' OR ');
+        conditions.push(`(${searchConditions})`);
+        // Add search parameters for each condition
+        for (let i = 0; i < 7; i++) {
+            searchParams.push(`%${search}%`);
+        }
+    }
+
+    if (customerCategory && customerCategory !== '') {
+        conditions.push('appointments.customer_category = ?');
+        searchParams.push(customerCategory);
+    }
+
+    // Month/Year filtering - check only created_at field
+    if (month && month !== '' && year && year !== '') {
+        conditions.push('(MONTH(appointments.created_at) = ? AND YEAR(appointments.created_at) = ?)');
+        searchParams.push(parseInt(month), parseInt(year));
+    } else if (year && year !== '' && year !== 0) {
+        conditions.push('YEAR(appointments.created_at) = ?');
+        searchParams.push(parseInt(year));
+    }
+
+    // Additional filters
+    if (visitType && visitType !== '') {
+        conditions.push('appointments.visit_type = ?');
+        searchParams.push(visitType);
+    }
+
+    if (status && status !== '') {
+        conditions.push('appointments.status = ?');
+        searchParams.push(status);
+    }
+
+    if (medicalStatus && medicalStatus !== '') {
+        conditions.push('(appointments.medical_status = ? OR appointments.center_medical_status = ? OR appointments.home_medical_status = ?)');
+        searchParams.push(medicalStatus, medicalStatus, medicalStatus);
+    }
+
+    if (qcStatus && qcStatus !== '') {
+        conditions.push('appointments.qc_status = ?');
+        searchParams.push(qcStatus);
+    }
+
+    // TPA User Filtering: If user is TPA role, show only their assigned TPA's appointments
+    // Check both string role name and role_id for flexibility
+    const isTpaRole = userRole === 2 || (typeof userRole === 'string' && userRole.toLowerCase().includes('tpa'));
+    
+    if (userId && isTpaRole) {
+        conditions.push(`appointments.client_id IN (
+            SELECT c.id FROM clients c WHERE c.user_id = ?
+        )`);
+        searchParams.push(userId);
+        
+        logger.info('TPA user filtering applied', {
+            userId,
+            userRole,
+            filterType: 'TPA assignment'
+        });
+    }
+
+    // Always filter out deleted and pending approval appointments
+    conditions.push('appointments.is_deleted = 0');
+    conditions.push('appointments.has_pending_approval = 0');
+
+    const whereClause = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+    const allowedSortColumns = [
+        'id', 'case_number', 'application_number', 'customer_first_name',
+        'customer_last_name', 'customer_mobile', 'appointment_date',
+        'visit_type', 'status', 'created_at'
+    ];
+    const validSortBy = allowedSortColumns.includes(sortBy) ? sortBy : 'id';
+    const validSortOrder = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    const countSql = `SELECT COUNT(*) as total FROM appointments LEFT JOIN diagnostic_centers home_center ON appointments.center_id = home_center.id LEFT JOIN diagnostic_centers other_center ON appointments.other_center_id = other_center.id${whereClause}`;
+    const [countRows] = await db.pool.query(countSql, searchParams);
+    const total = countRows[0].total;
+
+    const numericLimit = Number(limit);
+    const numericPage = Number(page);
+    
+    let sql = `SELECT 
+                appointments.*,
+                home_center.center_name as home_center_name,
+                other_center.center_name as other_center_name
+                FROM appointments 
+                LEFT JOIN diagnostic_centers home_center ON appointments.center_id = home_center.id
+                LEFT JOIN diagnostic_centers other_center ON appointments.other_center_id = other_center.id
+                ${whereClause} ORDER BY ${validSortBy} ${validSortOrder}`;
+    let dataParams = [...searchParams];
+    
+    if (!isNaN(numericLimit) && numericLimit > 0) {
+        const offset = (numericPage - 1) * numericLimit;
+        sql += ` LIMIT ? OFFSET ?`;
+        dataParams.push(numericLimit, offset);
+    }
+
+    const [rows] = await db.pool.query(sql, dataParams);
+
+    return {
+        data: rows,
+        pagination: {
+            total,
+            page: numericPage,
+            limit: numericLimit,
+            pages: numericLimit > 0 ? Math.ceil(total / numericLimit) : 1,
+        },
+    };
+}
+
+/**
+ * Get single appointment by ID
+ */
+async function getAppointment(id) {
+    const r = await db.query('SELECT * FROM appointments WHERE id = ?', [id]);
+    return r[0];
+}
+
+/**
+ * Get multiple appointments by IDs
+ */
+async function getAppointmentsByIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+    const sql = `SELECT * FROM appointments WHERE id IN (${placeholders})`;
+    const rows = await db.query(sql, ids);
+    return rows;
+}
+
+const {
+    verifyTestRates,
+    updateAppointmentBasicFields,
+    processTestAssignments
+} = require('./AppointmentUpdateHelpers');
+
+/**
+ * Update appointment
+ */
+async function updateAppointment(id, row) {
+    console.log(' [APPOINTMENT-CRUD] updateAppointment called:', {
+        appointmentId: id,
+        hasSelectedItems: !!row.selected_items
+    });
+
+    const connection = await db.pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // Update basic appointment fields
+        await updateAppointmentBasicFields(connection, id, row);
+
+        // Handle selected_items (test assignments)
+        if (Object.prototype.hasOwnProperty.call(row, 'selected_items')) {
+            const selectedItems = row.selected_items;
+
+            if (Array.isArray(selectedItems)) {
+                // Get appointment details
+                const [appointmentRows] = await connection.execute(
+                    'SELECT center_id, other_center_id, client_id, insurer_id FROM appointments WHERE id = ?',
+                    [id]
+                );
+
+                if (appointmentRows.length === 0) {
+                    throw new Error('Appointment not found');
+                }
+
+                const appointment = appointmentRows[0];
+
+                // Verify test rates to prevent tampering
+                if (selectedItems.length > 0 && appointment.client_id && appointment.insurer_id) {
+                    await verifyTestRates(selectedItems, appointment.client_id, appointment.insurer_id, connection);
+                }
+
+                // Process test assignments (update/insert/delete)
+                await processTestAssignments(
+                    connection,
+                    id,
+                    selectedItems,
+                    appointment,
+                    row.updated_by || null
+                );
+            }
+        }
+
+        await connection.commit();
+        return true;
+    } catch (error) {
+        await connection.rollback();
+        logger.error('updateAppointment error:', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
+}
+
+/**
+ * Soft delete appointments
+ */
+async function softDeleteAppointments(ids, updatedBy) {
+    if (!ids.length) return 0;
+
+    const placeholders = ids.map(() => '?').join(', ');
+    const sql = `UPDATE appointments SET is_deleted = 1, updated_by = ?, updated_at = NOW() WHERE id IN (${placeholders})`;
+    const result = await db.query(sql, [updatedBy, ...ids]);
+    return result.affectedRows;
+}
+
+/**
+ * Hard delete appointment
+ */
+async function deleteAppointment(id) {
+    const result = await db.query('DELETE FROM appointments WHERE id = ?', [id]);
+    return result.affectedRows;
+}
+
+/**
+ * Bulk update appointments (technician/center assignments)
+ */
+async function bulkUpdateAppointments(ids, updates) {
+    const fields = [];
+    const values = [];
+
+    // Enforce amount = 0 when cost type is Credit
+    if (updates && Object.prototype.hasOwnProperty.call(updates, 'cost_type')) {
+        const ct = updates.cost_type;
+        if (ct && String(ct).toLowerCase() === 'credit') {
+            updates.amount = 0;
+        }
+    }
+
+    if (updates.assigned_technician_id !== undefined) {
+        fields.push('assigned_technician_id = ?');
+        values.push(updates.assigned_technician_id);
+    }
+    if (updates.center_id !== undefined) {
+        fields.push('center_id = ?');
+        values.push(updates.center_id);
+    }
+    if (updates.cost_type !== undefined) {
+        fields.push('cost_type = ?');
+        values.push(updates.cost_type);
+    }
+    if (updates.amount !== undefined) {
+        fields.push('amount = ?');
+        values.push(updates.amount);
+    }
+    if (updates.status !== undefined) {
+        fields.push('status = ?');
+        values.push(updates.status);
+    }
+
+    if (fields.length === 0) {
+        throw new Error('No fields to update');
+    }
+
+    fields.push('updated_at = NOW()');
+
+    if (updates.updated_by) {
+        fields.push('updated_by = ?');
+        values.push(updates.updated_by);
+    }
+
+    const placeholders = ids.map(() => '?').join(', ');
+    const sql = `UPDATE appointments SET ${fields.join(', ')} WHERE id IN (${placeholders})`;
+    const result = await db.query(sql, [...values, ...ids]);
+    return result.affectedRows;
+}
+
+module.exports = {
+    createAppointment,
+    listAppointments,
+    getAppointment,
+    getAppointmentsByIds,
+    updateAppointment,
+    softDeleteAppointments,
+    deleteAppointment,
+    bulkUpdateAppointments,
+    updateAppointmentStatus
+};

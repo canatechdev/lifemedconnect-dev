@@ -1,0 +1,109 @@
+# ==========================
+# Dependencies
+# ==========================
+node_modules/
+package-lock.json
+
+# ==========================
+# Environment variables
+# ==========================
+.env
+.env.local
+.env.*.local
+
+# ==========================
+# Logs
+# ==========================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+
+# docs/
+# scripts/
+# ==========================
+# Database files
+# ==========================
+# *.sql
+# *.sqllite
+# Keep .db files
+# !*.db
+/migrations
+# ==========================
+# Uploads - keep folder and first layer
+# ==========================
+
+# Ignore everything inside uploads
+uploads/**
+
+# But keep the uploads folder itself
+!uploads/
+
+# Keep only first-level subfolders
+!uploads/*/
+
+# Ignore all files inside those subfolders
+uploads/*/*
+
+!.gitkeep
+
+
+# ==========================
+# OS files
+# ==========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================
+# IDE files
+# ==========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ==========================
+# Build files
+# ==========================
+dist/
+build/
+*.zip
+*.tar.gz
+
+# ==========================
+# Frontend build (public folder contents)
+# ==========================
+# Keep public folder structure but ignore build files
+# public/*
+# !public/.gitkeep
+
+# ==========================
+# Test coverage
+# ==========================
+coverage/
+.nyc_output/
+
+# ==========================
+# Misc
+# ==========================
+back.zip
+
+# ==========================
+# Files/folders to ignore
+# ==========================
+docs/
+scripts/
+/scripts
+s_appointments.js
+sample-pathology.json
+
+# # ==========================
+# # Other archives and markdown
+# # ==========================
+*.md
+*.zip
+*.rar

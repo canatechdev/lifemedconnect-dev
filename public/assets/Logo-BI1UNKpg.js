@@ -1,0 +1,1 @@
+import{j as s}from"./ui-libs-E7U3H7o_.js";import{f as i,A as r}from"./index-BiaLPLVQ.js";const c="/img/logo/",d=o=>{const{type:l="full",mode:t="light",className:a,imgClass:m,style:e,logoWidth:g="auto"}=o;return s.jsx("div",{className:i("logo",a),style:{...e,width:g},children:s.jsx("img",{className:m,src:`${c}logo-${t}-${l}.png`,alt:`${r} logo`})})};export{d as L};
