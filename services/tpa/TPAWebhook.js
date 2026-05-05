@@ -4,8 +4,11 @@
  */
 
 const axios = require('axios');
+const crypto = require('crypto');
 const db = require('../../lib/dbconnection');
 const logger = require('../../lib/logger');
+
+const WEBHOOK_STATUS_PATH = '/webhook/status';
 
 class TPAWebhookService {
     /**
@@ -37,11 +40,11 @@ class TPAWebhookService {
                 return;
             }
 
-            // Get TPA webhook configuration
+            // Get TPA webhook configuration (must be active and not deleted)
             const tpaKeys = await db.query(
                 `SELECT webhook_url, webhook_auth_method, webhook_auth_credentials
                  FROM tpa_api_keys
-                 WHERE client_id = ? AND is_active = TRUE AND webhook_url IS NOT NULL`,
+                 WHERE client_id = ? AND is_active = TRUE AND webhook_url IS NOT NULL AND deleted_at IS NULL`,
                 [clientId]
             );
 
@@ -50,82 +53,91 @@ class TPAWebhookService {
                 return;
             }
 
-            // Debug logging
-            logger.info('TPA config query result', { 
+            logger.info('[TPA-WH] Config found', { 
                 clientId, 
                 eventType, 
-                tpaKeysLength: tpaKeys.length,
-                firstKey: tpaKeys[0] ? 'defined' : 'undefined'
+                configCount: tpaKeys.length
             });
 
             const tpaConfig = tpaKeys[0];
             
             if (!tpaConfig) {
-                logger.error('TPA config is undefined', { 
-                    clientId, 
-                    eventType, 
-                    tpaKeys: JSON.stringify(tpaKeys)
-                });
+                logger.error('[TPA-WH] Config undefined after query', { clientId, eventType });
                 return;
             }
 
-            // Validate TPA config structure
+            logger.info('[TPA-WH] TPA Config', {
+                clientId,
+                authMethod: tpaConfig.webhook_auth_method,
+                hasCredentials: !!tpaConfig.webhook_auth_credentials,
+                credentialsPreview: tpaConfig.webhook_auth_credentials ? tpaConfig.webhook_auth_credentials.substring(0, 12) + '...' : 'none'
+            });
+
             if (!tpaConfig.webhook_url || typeof tpaConfig.webhook_url !== 'string') {
-                logger.error('Invalid webhook URL in TPA config', { 
-                    clientId, 
-                    eventType, 
-                    webhookUrl: tpaConfig.webhook_url,
-                    type: typeof tpaConfig.webhook_url
-                });
+                logger.error('[TPA-WH] Invalid webhook URL', { clientId, webhookUrl: tpaConfig.webhook_url });
                 return;
             }
 
             if (!tpaConfig.webhook_auth_method || !['api_key', 'basic_auth', 'none'].includes(tpaConfig.webhook_auth_method)) {
-                logger.error('Invalid auth method in TPA config', { 
-                    clientId, 
-                    eventType, 
-                    authMethod: tpaConfig.webhook_auth_method
-                });
+                logger.error('[TPA-WH] Invalid auth method', { clientId, authMethod: tpaConfig.webhook_auth_method });
                 return;
             }
 
-            // Validate webhook URL format
+            // Build full webhook URL - append /webhook/status path
+            let webhookUrl = tpaConfig.webhook_url.replace(/\/+$/, ''); // trim trailing slashes
+            if (!webhookUrl.includes('/webhook/status')) {
+                webhookUrl += WEBHOOK_STATUS_PATH;
+            }
+
             try {
-                new URL(tpaConfig.webhook_url);
+                new URL(webhookUrl);
             } catch (urlError) {
-                logger.error('Invalid webhook URL format', { 
-                    clientId, 
-                    eventType, 
-                    webhookUrl: tpaConfig.webhook_url,
-                    error: urlError.message
-                });
+                logger.error('[TPA-WH] Invalid webhook URL format', { clientId, webhookUrl, error: urlError.message });
                 return;
             }
+
+            // Use the full URL in config for delivery
+            const deliveryConfig = { ...tpaConfig, webhook_url: webhookUrl };
+
             const payload = this.buildWebhookPayload(eventType, eventData);
 
-            // Send webhook
-            await this.deliverWebhook(clientId, tpaConfig, payload, eventType, eventData);
-
-        } catch (error) {
-            logger.error('Error sending webhook', {
+            logger.info('[TPA-WH] Sending webhook', {
                 clientId,
                 eventType,
-                error: error.message
+                caseNumber: eventData.case_number,
+                webhookUrl
+            });
+
+            // Send webhook
+            await this.deliverWebhook(clientId, deliveryConfig, payload, eventType, eventData);
+
+        } catch (error) {
+            logger.error('[TPA-WH] Error in sendWebhook', {
+                clientId,
+                eventType,
+                error: error.message,
+                stack: error.stack
             });
         }
     }
 
     /**
-     * Build webhook payload
+     * Build webhook payload with HMAC signature for verification
      */
     static buildWebhookPayload(eventType, eventData) {
-        return {
+        const payload = {
             event_type: eventType,
             timestamp: new Date().toISOString(),
             case_number: eventData.case_number,
-            appointment_number: eventData.application_number,
+            application_number: eventData.application_number,
             data: eventData.data || {}
         };
+
+        // Add HMAC signature so TPA can verify payload integrity
+        const signatureBody = JSON.stringify({ event_type: payload.event_type, timestamp: payload.timestamp, case_number: payload.case_number });
+        payload.signature = crypto.createHmac('sha256', process.env.TPA_WEBHOOK_SECRET || 'tpa-webhook-default-secret').update(signatureBody).digest('hex');
+
+        return payload;
     }
 
     /**
@@ -137,10 +149,22 @@ class TPAWebhookService {
         };
 
         // Add authentication based on method
+        logger.info('[TPA-WH] Setting up auth', {
+            authMethod: tpaConfig.webhook_auth_method,
+            hasCredentials: !!tpaConfig.webhook_auth_credentials
+        });
+
         if (tpaConfig.webhook_auth_method === 'api_key' && tpaConfig.webhook_auth_credentials) {
             headers['X-API-Key'] = tpaConfig.webhook_auth_credentials;
+            logger.info('[TPA-WH] Added X-API-Key header');
         } else if (tpaConfig.webhook_auth_method === 'basic_auth' && tpaConfig.webhook_auth_credentials) {
             headers['Authorization'] = `Basic ${tpaConfig.webhook_auth_credentials}`;
+            logger.info('[TPA-WH] Added Authorization header');
+        } else {
+            logger.warn('[TPA-WH] No auth headers added', {
+                authMethod: tpaConfig.webhook_auth_method,
+                hasCredentials: !!tpaConfig.webhook_auth_credentials
+            });
         }
 
         let logId = null;
@@ -156,6 +180,8 @@ class TPAWebhookService {
             logId = logResult.insertId;
 
             // Send webhook
+            logger.info('[TPA-WH] Delivering to URL', { url: tpaConfig.webhook_url, eventType, caseNumber: eventData.case_number });
+
             const response = await axios.post(tpaConfig.webhook_url, payload, {
                 headers,
                 timeout: 10000
@@ -169,10 +195,11 @@ class TPAWebhookService {
                 [response.status, JSON.stringify(response.data), logId]
             );
 
-            logger.info('Webhook delivered successfully', {
+            logger.info('[TPA-WH] Delivered successfully', {
                 clientId,
                 eventType,
-                status: response.status
+                caseNumber: eventData.case_number,
+                httpStatus: response.status
             });
 
         } catch (error) {
@@ -187,11 +214,13 @@ class TPAWebhookService {
                 );
             }
 
-            logger.error('Webhook delivery failed', {
+            logger.error('[TPA-WH] Delivery failed', {
                 clientId,
                 eventType,
+                caseNumber: eventData.case_number,
                 error: error.message,
-                status: error.response?.status
+                httpStatus: error.response?.status,
+                responseData: error.response?.data
             });
 
             // Schedule retry if less than 3 attempts
@@ -229,118 +258,13 @@ class TPAWebhookService {
     }
 
     /**
-     * Trigger appointment event webhook based on status changes
-     * @param {string} eventType - Event type
-     * @param {object} appointmentData - Appointment data
-     * @param {object} additionalData - Additional data (images, documents, etc.)
+     * Send pre-built event data to TPA webhook
+     * @param {number} clientId - TPA client ID
+     * @param {string} eventType - Event type (e.g. appointment_confirmed)
+     * @param {object} eventData - Pre-built event data from tpaWebhookHelper { case_number, application_number, data: {...} }
      */
-    static async triggerAppointmentEvent(eventType, appointmentData, additionalData = {}) {
-        const eventData = {
-            case_number: appointmentData.case_number,
-            application_number: appointmentData.application_number || '',
-            data: {
-                patient_name: appointmentData.customer_first_name + ' ' + (appointmentData.customer_last_name || ''),
-                patient_phone: appointmentData.customer_mobile,
-                patient_email: appointmentData.customer_email,
-                appointment_date: appointmentData.appointment_date,
-                appointment_time: appointmentData.appointment_time,
-                status: appointmentData.status,
-                medical_status: appointmentData.medical_status,
-                qc_status: appointmentData.qc_status,
-                visit_type: appointmentData.visit_type,
-                customer_images: additionalData.customer_images || [],
-                documents: additionalData.documents || [],
-                tpa_pdf_url: additionalData.tpa_pdf_url || null,
-                remarks: appointmentData.remarks || '',
-                medical_remarks: appointmentData.medical_remarks || '',
-                cancellation_reason: appointmentData.cancellation_reason || '',
-                pushback_remarks: appointmentData.pushback_remarks || '',
-                reschedule_remark: appointmentData.reschedule_remark || '',
-                timestamp: new Date().toISOString()
-            }
-        };
-
-        await this.sendWebhook(appointmentData.client_id, eventType, eventData);
-    }
-
-    /**
-     * Trigger status change webhook - automatically determines event type
-     * @param {object} appointmentData - Appointment data
-     * @param {object} previousData - Previous appointment data for comparison
-     * @param {object} additionalData - Additional data (images, documents, etc.)
-     */
-    static async triggerStatusChange(appointmentData, previousData = {}, additionalData = {}) {
-        const events = [];
-
-        // Check main status changes
-        if (appointmentData.status !== previousData.status) {
-            const statusEvent = this.getStatusEvent(appointmentData.status);
-            if (statusEvent) events.push(statusEvent);
-            
-            // Special handling: pushback should also trigger cancelled event
-            if (appointmentData.status === 'pushed_back') {
-                events.push('appointment_cancelled');
-            }
-        }
-
-        // Check medical status changes
-        if (appointmentData.medical_status !== previousData.medical_status) {
-            const medicalEvent = this.getMedicalStatusEvent(appointmentData.medical_status);
-            if (medicalEvent) events.push(medicalEvent);
-        }
-
-        // Check QC status changes
-        if (appointmentData.qc_status !== previousData.qc_status) {
-            const qcEvent = this.getQCStatusEvent(appointmentData.qc_status);
-            if (qcEvent) events.push(qcEvent);
-        }
-
-        // Trigger all relevant events
-        for (const eventType of events) {
-            await this.triggerAppointmentEvent(eventType, appointmentData, additionalData);
-        }
-    }
-
-    /**
-     * Get event type for main status
-     */
-    static getStatusEvent(status) {
-        const statusEvents = {
-            'scheduled': 'appointment_scheduled',
-            'confirmed': 'appointment_confirmed',
-            'pushed_back': 'appointment_rescheduled', // Also triggers cancelled event
-            'checked_in': 'patient_checked_in',
-            'medical_partially_completed': 'medical_partially_completed',
-            'medical_completed': 'medical_completed',
-            'completed': 'appointment_completed',
-            'cancelled': 'appointment_cancelled'
-        };
-        return statusEvents[status] || null;
-    }
-
-    /**
-     * Get event type for medical status
-     */
-    static getMedicalStatusEvent(medicalStatus) {
-        const medicalEvents = {
-            'scheduled': 'medical_scheduled',
-            'arrived': 'patient_arrived',
-            'in_process': 'medical_in_progress',
-            'partially_completed': 'medical_partially_completed',
-            'completed': 'medical_completed'
-        };
-        return medicalEvents[medicalStatus] || null;
-    }
-
-    /**
-     * Get event type for QC status
-     */
-    static getQCStatusEvent(qcStatus) {
-        const qcEvents = {
-            'pending': 'qc_pending',
-            'completed': 'qc_completed'
-        };
-        return qcEvents[qcStatus] || null;
+    static async sendEvent(clientId, eventType, eventData) {
+        await this.sendWebhook(clientId, eventType, eventData);
     }
 }
 

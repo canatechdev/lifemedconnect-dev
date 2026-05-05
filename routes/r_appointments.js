@@ -20,7 +20,8 @@ const {
     triggerAppointmentRescheduled,
     triggerAppointmentCancelled,
     triggerMedicalStatusUpdate,
-    triggerQCCompleted
+    triggerQCCompleted,
+    triggerEnhancedWebhookNow
 } = require('../lib/tpaWebhookHelper');
 const fs = require('fs');
 const path = require('path');
@@ -1122,10 +1123,12 @@ router.patch('/appointments/:id/medical-status',
                     }
                     
                     // Trigger specific webhook event
-                    await triggerMedicalStatusUpdate(appointmentId, 'completed', actorContext, completionData);
-                    
-                    webhookStatus.sent = true;
-                    webhookStatus.message = 'TPA webhook sent successfully';
+                    const wasWebhookTriggered = await triggerMedicalStatusUpdate(appointmentId, 'completed', actorContext, completionData);
+
+                    webhookStatus.sent = !!wasWebhookTriggered;
+                    webhookStatus.message = wasWebhookTriggered
+                        ? 'TPA webhook sent successfully'
+                        : 'TPA webhook skipped (unsupported status mapping)';
                     
                     logger.info('TPA webhook triggered for medical completion', { 
                         appointmentId,
@@ -1187,10 +1190,12 @@ router.patch('/appointments/:id/medical-status',
                 }
                 
                 // Trigger webhook with actor context
-                await triggerMedicalStatusUpdate(appointmentId, medical_status, actorContext, additionalData);
-                
-                webhookStatus.sent = true;
-                webhookStatus.message = 'TPA webhook sent successfully';
+                const wasWebhookTriggered = await triggerMedicalStatusUpdate(appointmentId, medical_status, actorContext, additionalData);
+
+                webhookStatus.sent = !!wasWebhookTriggered;
+                webhookStatus.message = wasWebhookTriggered
+                    ? 'TPA webhook sent successfully'
+                    : 'TPA webhook skipped (unsupported status mapping)';
                 
                 logger.info('TPA webhook triggered for medical status update', { 
                     appointmentId,
@@ -1308,7 +1313,7 @@ router.post('/appointments/:id/push-back',
                 webhookStatus.sent = true;
                 webhookStatus.message = 'TPA webhook sent successfully';
                 
-                logger.info('TPA webhook triggered for appointment push-back (cancelled)', { 
+                logger.info('[TPA-WH] Triggered for cancellation/push-back', { 
                     appointmentId: req.params.id
                 });
             } catch (webhookError) {
@@ -1316,7 +1321,7 @@ router.post('/appointments/:id/push-back',
                 webhookStatus.message = 'TPA webhook failed';
                 webhookStatus.error = webhookError.message;
                 
-                logger.error('Failed to trigger TPA webhook for appointment push-back', { 
+                logger.error('[TPA-WH] Failed for cancellation/push-back', { 
                     appointmentId: req.params.id,
                     error: webhookError.message 
                 });
@@ -1575,6 +1580,9 @@ router.post('/appointments/:id/documents',
             req.user.id
         );
 
+        // Trigger enhanced webhook immediately if patient has arrived
+        triggerEnhancedWebhookNow(appointmentId);
+
         return ApiResponse.success(res, result);
     })
 );
@@ -1608,6 +1616,9 @@ router.post('/appointments/:id/customer-images',
             fileName,
             req.user.id
         );
+
+        // Trigger enhanced webhook immediately if patient has arrived
+        triggerEnhancedWebhookNow(appointmentId);
 
         return ApiResponse.success(res, result);
     })

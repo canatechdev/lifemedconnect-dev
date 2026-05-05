@@ -374,9 +374,9 @@ async function rescheduleAppointment(appointmentId, newConfirmedDate, newConfirm
                 }
             }, connection);
         } else {
-            // Single center/home flow - use existing fields
+            // Single center/home flow - use visit-type specific fields
             const oldDateValue = currentRow.confirmed_date;
-            const oldTime = currentRow.confirmed_time;
+            const oldTimeValue = currentRow.confirmed_time;
 
             let oldDate = null;
             if (oldDateValue instanceof Date) {
@@ -388,8 +388,21 @@ async function rescheduleAppointment(appointmentId, newConfirmedDate, newConfirm
                 oldDate = oldDateValue.split('T')[0];
             }
 
+            let oldTime = null;
+            if (oldTimeValue) {
+                oldTime = oldTimeValue.split(' ')[0] || oldTimeValue;
+            }
+
             if (oldDate && oldTime && oldDate === newConfirmedDate && oldTime === newConfirmedTime) {
                 throw new Error('Reschedule must be different from existing schedule date and time');
+            }
+
+            // Use visit-type specific remark field
+            let remarkField = 'reschedule_remark';
+            if (visitType === 'Home_Visit') {
+                remarkField = 'home_reschedule_remark';
+            } else if (visitType === 'Center') {
+                remarkField = 'center_reschedule_remark';
             }
 
             await connection.query(
@@ -398,7 +411,7 @@ async function rescheduleAppointment(appointmentId, newConfirmedDate, newConfirm
                      confirmed_date = ?,
                      confirmed_time = ?,
                      medical_status = 'rescheduled',
-                     reschedule_remark = ?,
+                     ${remarkField} = ?,
                      updated_at = NOW(),
                      updated_by = ?
                  WHERE id = ?`,
