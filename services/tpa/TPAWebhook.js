@@ -42,7 +42,7 @@ class TPAWebhookService {
 
             // Get TPA webhook configuration (must be active and not deleted)
             const tpaKeys = await db.query(
-                `SELECT webhook_url, webhook_auth_method, webhook_auth_credentials
+                `SELECT webhook_url, webhook_auth_method, webhook_auth_credentials, api_key
                  FROM tpa_api_keys
                  WHERE client_id = ? AND is_active = TRUE AND webhook_url IS NOT NULL AND deleted_at IS NULL`,
                 [clientId]
@@ -69,8 +69,8 @@ class TPAWebhookService {
             logger.info('[TPA-WH] TPA Config', {
                 clientId,
                 authMethod: tpaConfig.webhook_auth_method,
-                hasCredentials: !!tpaConfig.webhook_auth_credentials,
-                credentialsPreview: tpaConfig.webhook_auth_credentials ? tpaConfig.webhook_auth_credentials.substring(0, 12) + '...' : 'none'
+                hasCredentials: !!tpaConfig.api_key,
+                credentialsPreview: tpaConfig.api_key ? tpaConfig.api_key.substring(0, 12) + '...' : 'none'
             });
 
             if (!tpaConfig.webhook_url || typeof tpaConfig.webhook_url !== 'string') {
@@ -151,11 +151,11 @@ class TPAWebhookService {
         // Add authentication based on method
         logger.info('[TPA-WH] Setting up auth', {
             authMethod: tpaConfig.webhook_auth_method,
-            hasCredentials: !!tpaConfig.webhook_auth_credentials
+            hasCredentials: !!tpaConfig.api_key
         });
 
-        if (tpaConfig.webhook_auth_method === 'api_key' && tpaConfig.webhook_auth_credentials) {
-            headers['X-API-Key'] = tpaConfig.webhook_auth_credentials;
+        if (tpaConfig.webhook_auth_method === 'api_key' && tpaConfig.api_key) {
+            headers['X-API-Key'] = tpaConfig.api_key;
             logger.info('[TPA-WH] Added X-API-Key header');
         } else if (tpaConfig.webhook_auth_method === 'basic_auth' && tpaConfig.webhook_auth_credentials) {
             headers['Authorization'] = `Basic ${tpaConfig.webhook_auth_credentials}`;
@@ -163,7 +163,7 @@ class TPAWebhookService {
         } else {
             logger.warn('[TPA-WH] No auth headers added', {
                 authMethod: tpaConfig.webhook_auth_method,
-                hasCredentials: !!tpaConfig.webhook_auth_credentials
+                hasCredentials: !!tpaConfig.api_key
             });
         }
 
