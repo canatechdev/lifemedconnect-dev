@@ -8,6 +8,140 @@ const { generateCustomCode } = require('../../lib/generateCode');
 const logger = require('../../lib/logger');
 
 /**
+ * Helper function to build date filter conditions
+ * Supports multiple date fields and range types
+ * @param {string} dateField - 'created_at', 'appointment_date', or 'confirmed_date'
+ * @param {string} rangeType - 'today', 'tomorrow', 'upcoming', 'custom', 'monthly', 'yearly'
+ * @param {object} dateParams - { fromDate, toDate, month, year }
+ * @returns {object} { conditions: [], params: [] }
+ */
+function buildDateFilter(dateField = 'created_at', rangeType = '', dateParams = {}) {
+    const conditions = [];
+    const params = [];
+    
+    if (!rangeType || rangeType === '') {
+        return { conditions, params };
+    }
+
+    // Use local timezone for date calculations, not UTC
+    const today = new Date();
+    const localToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const localTomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+    
+    // Format dates as YYYY-MM-DD strings in local timezone
+    const todayString = localToday.getFullYear() + '-' + 
+        String(localToday.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(localToday.getDate()).padStart(2, '0');
+    const tomorrowString = localTomorrow.getFullYear() + '-' + 
+        String(localTomorrow.getMonth() + 1).padStart(2, '0') + '-' + 
+        String(localTomorrow.getDate()).padStart(2, '0');
+
+    let dateColumn = 'appointments.created_at';
+    
+    if (dateField === 'appointment_date') {
+        dateColumn = 'appointments.appointment_date';
+    } else if (dateField === 'confirmed_date') {
+        // For confirmed_date, check both confirmed_date and center/home confirmed timestamps
+        // This will be handled specially below
+    }
+
+    switch (rangeType) {
+        case 'today':
+            if (dateField === 'confirmed_date') {
+                conditions.push(`(DATE(appointments.confirmed_date) = DATE(?) OR DATE(appointments.center_confirmed_at) = DATE(?) OR DATE(appointments.home_confirmed_at) = DATE(?))`);
+                params.push(todayString, todayString, todayString);
+            } else {
+                // Use UTC date functions for appointment_date to avoid timezone issues
+                if (dateField === 'appointment_date') {
+                    conditions.push(`DATE(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) = DATE(?)`);
+                } else {
+                    conditions.push(`DATE(${dateColumn}) = DATE(?)`);
+                }
+                params.push(todayString);
+            }
+            break;
+
+        case 'tomorrow':
+            if (dateField === 'confirmed_date') {
+                conditions.push(`(DATE(appointments.confirmed_date) = DATE(?) OR DATE(appointments.center_confirmed_at) = DATE(?) OR DATE(appointments.home_confirmed_at) = DATE(?))`);
+                params.push(tomorrowString, tomorrowString, tomorrowString);
+            } else {
+                if (dateField === 'appointment_date') {
+                    conditions.push(`DATE(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) = DATE(?)`);
+                } else {
+                    conditions.push(`DATE(${dateColumn}) = DATE(?)`);
+                }
+                params.push(tomorrowString);
+            }
+            break;
+
+        case 'upcoming':
+            if (dateField === 'confirmed_date') {
+                conditions.push(`(DATE(appointments.confirmed_date) >= DATE(?) OR DATE(appointments.center_confirmed_at) >= DATE(?) OR DATE(appointments.home_confirmed_at) >= DATE(?))`);
+                params.push(todayString, todayString, todayString);
+            } else {
+                if (dateField === 'appointment_date') {
+                    conditions.push(`DATE(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) >= DATE(?)`);
+                } else {
+                    conditions.push(`DATE(${dateColumn}) >= DATE(?)`);
+                }
+                params.push(todayString);
+            }
+            break;
+
+        case 'custom':
+            if (dateParams.fromDate && dateParams.toDate) {
+                if (dateField === 'confirmed_date') {
+                    conditions.push(`(DATE(appointments.confirmed_date) BETWEEN DATE(?) AND DATE(?) OR DATE(appointments.center_confirmed_at) BETWEEN DATE(?) AND DATE(?) OR DATE(appointments.home_confirmed_at) BETWEEN DATE(?) AND DATE(?))`);
+                    params.push(dateParams.fromDate, dateParams.toDate, dateParams.fromDate, dateParams.toDate, dateParams.fromDate, dateParams.toDate);
+                } else {
+                    if (dateField === 'appointment_date') {
+                        conditions.push(`DATE(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) BETWEEN DATE(?) AND DATE(?)`);
+                    } else {
+                        conditions.push(`DATE(${dateColumn}) BETWEEN DATE(?) AND DATE(?)`);
+                    }
+                    params.push(dateParams.fromDate, dateParams.toDate);
+                }
+            }
+            break;
+
+        case 'monthly':
+            if (dateParams.month && dateParams.year) {
+                if (dateField === 'confirmed_date') {
+                    conditions.push(`(MONTH(appointments.confirmed_date) = ? AND YEAR(appointments.confirmed_date) = ?) OR (MONTH(appointments.center_confirmed_at) = ? AND YEAR(appointments.center_confirmed_at) = ?) OR (MONTH(appointments.home_confirmed_at) = ? AND YEAR(appointments.home_confirmed_at) = ?)`);
+                    params.push(parseInt(dateParams.month), parseInt(dateParams.year), parseInt(dateParams.month), parseInt(dateParams.year), parseInt(dateParams.month), parseInt(dateParams.year));
+                } else {
+                    if (dateField === 'appointment_date') {
+                        conditions.push(`(MONTH(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) = ? AND YEAR(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) = ?)`);
+                    } else {
+                        conditions.push(`(MONTH(${dateColumn}) = ? AND YEAR(${dateColumn}) = ?)`);
+                    }
+                    params.push(parseInt(dateParams.month), parseInt(dateParams.year));
+                }
+            }
+            break;
+
+        case 'yearly':
+            if (dateParams.year) {
+                if (dateField === 'confirmed_date') {
+                    conditions.push(`(YEAR(appointments.confirmed_date) = ? OR YEAR(appointments.center_confirmed_at) = ? OR YEAR(appointments.home_confirmed_at) = ?)`);
+                    params.push(parseInt(dateParams.year), parseInt(dateParams.year), parseInt(dateParams.year));
+                } else {
+                    if (dateField === 'appointment_date') {
+                        conditions.push(`YEAR(CONVERT_TZ(${dateColumn}, '+00:00', @@global.time_zone)) = ?`);
+                    } else {
+                        conditions.push(`YEAR(${dateColumn}) = ?`);
+                    }
+                    params.push(parseInt(dateParams.year));
+                }
+            }
+            break;
+    }
+
+    return { conditions, params };
+}
+
+/**
  * Safe value handler - returns null for undefined/null/empty values
  */
 const safe = (value) => {
@@ -244,7 +378,7 @@ async function createAppointment(row, connection = null) {
 /**
  * List appointments with pagination and search
  */
-async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id', sortOrder = 'DESC', customerCategory = '', month = '', year = '', visitType = '', status = '', medicalStatus = '', qcStatus = '', userId = null, userRole = null }) {
+async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id', sortOrder = 'DESC', customerCategory = '', month = '', year = '', visitType = '', status = '', medicalStatus = '', qcStatus = '', userId = null, userRole = null, dateField = 'created_at', rangeType = '', fromDate = '', toDate = '' }) {
     const searchColumns = ['case_number', 'application_number', 'customer_first_name', 'customer_last_name', 'customer_mobile', 'home_center.center_name', 'other_center.center_name'];
     const searchParams = [];
     const conditions = [];
@@ -271,13 +405,29 @@ async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id
         searchParams.push(customerCategory);
     }
 
-    // Month/Year filtering - check only created_at field
-    if (month && month !== '' && year && year !== '') {
-        conditions.push('(MONTH(appointments.created_at) = ? AND YEAR(appointments.created_at) = ?)');
-        searchParams.push(parseInt(month), parseInt(year));
-    } else if (year && year !== '' && year !== 0) {
-        conditions.push('YEAR(appointments.created_at) = ?');
-        searchParams.push(parseInt(year));
+    // Enhanced date filtering with support for multiple date fields and range types
+    // This takes priority over legacy filtering when rangeType is provided
+    if (rangeType && rangeType !== '') {
+        const dateFilterParams = {
+            month: month || '',
+            year: year || '',
+            fromDate: fromDate || '',
+            toDate: toDate || ''
+        };
+        const dateFilter = buildDateFilter(dateField, rangeType, dateFilterParams);
+        conditions.push(...dateFilter.conditions);
+        searchParams.push(...dateFilter.params);
+    } else {
+        // Legacy month/year filtering (only used when no rangeType is specified)
+        if (month && month !== '' && year && year !== '') {
+            // Backward compatibility: old month/year filtering
+            conditions.push('(MONTH(appointments.created_at) = ? AND YEAR(appointments.created_at) = ?)');
+            searchParams.push(parseInt(month), parseInt(year));
+        } else if (year && year !== '' && year !== 0) {
+            // Backward compatibility: old year-only filtering
+            conditions.push('YEAR(appointments.created_at) = ?');
+            searchParams.push(parseInt(year));
+        }
     }
 
     // Additional filters
@@ -535,5 +685,6 @@ module.exports = {
     softDeleteAppointments,
     deleteAppointment,
     bulkUpdateAppointments,
+    buildDateFilter,
     updateAppointmentStatus
 };

@@ -156,7 +156,12 @@ router.get('/appointments/export',
             status: req.query.status,
             medicalStatus: req.query.medicalStatus,
             qcStatus: req.query.qcStatus,
-            search: req.query.q
+            search: req.query.q,
+            // Enhanced date filtering parameters
+            dateField: req.query.dateField || 'created_at',
+            rangeType: req.query.rangeType || '',
+            fromDate: req.query.fromDate || '',
+            toDate: req.query.toDate || ''
         };
 
         logger.info('Exporting appointments', {
@@ -336,6 +341,12 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
     const status = req.query.status || '';
     const medicalStatus = req.query.medicalStatus || '';
     const qcStatus = req.query.qcStatus || '';
+    
+    // Enhanced date filtering parameters
+    const dateField = req.query.dateField || 'created_at';
+    const rangeType = req.query.rangeType || '';
+    const fromDate = req.query.fromDate || '';
+    const toDate = req.query.toDate || '';
 
     // If requester is a diagnostic center user, restrict to their appointments only
     const centerIdFromToken = req.user?.diagnostic_center_id || req.user?.center_id;   
@@ -354,7 +365,11 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
             medicalStatus,
             qcStatus,
             userId: req.user?.id,
-            userRole: req.user?.role_id
+            userRole: req.user?.role_id,
+            dateField,
+            rangeType,
+            fromDate,
+            toDate
         });
         return ApiResponse.paginated(res, result.data, result.pagination);
     }
@@ -374,7 +389,11 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
         medicalStatus,
         qcStatus,
         userId: req.user?.id,
-        userRole: req.user?.role_id
+        userRole: req.user?.role_id,
+        dateField,
+        rangeType,
+        fromDate,
+        toDate
     });
     return ApiResponse.paginated(res, result.data, result.pagination);
 }));
