@@ -378,7 +378,7 @@ async function createAppointment(row, connection = null) {
 /**
  * List appointments with pagination and search
  */
-async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id', sortOrder = 'DESC', customerCategory = '', month = '', year = '', visitType = '', status = '', medicalStatus = '', qcStatus = '', userId = null, userRole = null, dateField = 'created_at', rangeType = '', fromDate = '', toDate = '' }) {
+async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id', sortOrder = 'DESC', customerCategory = '', month = '', year = '', visitType = '', status = '', medicalStatus = '', qcStatus = '', userId = null, userRole = null, dateField = 'created_at', rangeType = '', fromDate = '', toDate = '', centerId = '' }) {
     const searchColumns = ['case_number', 'application_number', 'customer_first_name', 'customer_last_name', 'customer_mobile', 'home_center.center_name', 'other_center.center_name'];
     const searchParams = [];
     const conditions = [];
@@ -405,8 +405,7 @@ async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id
         searchParams.push(customerCategory);
     }
 
-    // Enhanced date filtering with support for multiple date fields and range types
-    // This takes priority over legacy filtering when rangeType is provided
+    // Clean Date Filtering: Only use dateField + rangeType (no legacy filters)
     if (rangeType && rangeType !== '') {
         const dateFilterParams = {
             month: month || '',
@@ -417,18 +416,8 @@ async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id
         const dateFilter = buildDateFilter(dateField, rangeType, dateFilterParams);
         conditions.push(...dateFilter.conditions);
         searchParams.push(...dateFilter.params);
-    } else {
-        // Legacy month/year filtering (only used when no rangeType is specified)
-        if (month && month !== '' && year && year !== '') {
-            // Backward compatibility: old month/year filtering
-            conditions.push('(MONTH(appointments.created_at) = ? AND YEAR(appointments.created_at) = ?)');
-            searchParams.push(parseInt(month), parseInt(year));
-        } else if (year && year !== '' && year !== 0) {
-            // Backward compatibility: old year-only filtering
-            conditions.push('YEAR(appointments.created_at) = ?');
-            searchParams.push(parseInt(year));
-        }
     }
+    // Note: Legacy month/year filtering completely removed to avoid conflicts
 
     // Additional filters
     if (visitType && visitType !== '') {
@@ -449,6 +438,12 @@ async function listAppointments({ page = 1, limit = 0, search = '', sortBy = 'id
     if (qcStatus && qcStatus !== '') {
         conditions.push('appointments.qc_status = ?');
         searchParams.push(qcStatus);
+    }
+
+    // Diagnostic Center Filtering: Filter by center_id OR other_center_id
+    if (centerId && centerId !== '') {
+        conditions.push('(appointments.center_id = ? OR appointments.other_center_id = ?)');
+        searchParams.push(parseInt(centerId), parseInt(centerId));
     }
 
     // TPA User Filtering: If user is TPA role, show only their assigned TPA's appointments

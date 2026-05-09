@@ -161,7 +161,9 @@ router.get('/appointments/export',
             dateField: req.query.dateField || 'created_at',
             rangeType: req.query.rangeType || '',
             fromDate: req.query.fromDate || '',
-            toDate: req.query.toDate || ''
+            toDate: req.query.toDate || '',
+            // Diagnostic center filtering
+            centerId: req.query.centerId || ''
         };
 
         logger.info('Exporting appointments', {
@@ -347,6 +349,9 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
     const rangeType = req.query.rangeType || '';
     const fromDate = req.query.fromDate || '';
     const toDate = req.query.toDate || '';
+    
+    // Diagnostic center filtering
+    const centerId = req.query.centerId || '';
 
     // If requester is a diagnostic center user, restrict to their appointments only
     const centerIdFromToken = req.user?.diagnostic_center_id || req.user?.center_id;   
@@ -369,7 +374,8 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
             dateField,
             rangeType,
             fromDate,
-            toDate
+            toDate,
+            centerId
         });
         return ApiResponse.paginated(res, result.data, result.pagination);
     }
@@ -393,7 +399,8 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
         dateField,
         rangeType,
         fromDate,
-        toDate
+        toDate,
+        centerId
     });
     return ApiResponse.paginated(res, result.data, result.pagination);
 }));

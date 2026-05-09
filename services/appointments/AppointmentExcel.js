@@ -648,13 +648,14 @@ async function getAppointmentsForExport(filters = {}) {
             dateField = 'created_at',
             rangeType = '',
             fromDate = '',
-            toDate = ''
+            toDate = '',
+            centerId = ''
         } = filters;
 
         const conditions = ['a.is_deleted = 0'];  // get non deleted rows 
         const params = [];
 
-        // Enhanced date filtering with support for multiple date fields and range types
+        // Clean Date Filtering: Only use dateField + rangeType (no legacy filters)
         if (rangeType && rangeType !== '') {
             const dateFilterParams = {
                 month: month || '',
@@ -665,18 +666,8 @@ async function getAppointmentsForExport(filters = {}) {
             const dateFilter = buildDateFilter(dateField, rangeType, dateFilterParams);
             conditions.push(...dateFilter.conditions);
             params.push(...dateFilter.params);
-        } else {
-            // Legacy month/year filtering (only used when no rangeType is specified)
-            if (month && month !== '' && year && year !== '') {
-                // Backward compatibility: old month/year filtering
-                conditions.push('(MONTH(a.created_at) = ? AND YEAR(a.created_at) = ?)');
-                params.push(parseInt(month), parseInt(year));
-            } else if (year && year !== '' && year !== 0) {
-                // Backward compatibility: old year-only filtering
-                conditions.push('YEAR(a.created_at) = ?');
-                params.push(parseInt(year));
-            }
         }
+        // Note: Legacy month/year filtering completely removed to avoid conflicts
 
         // Other filters
         if (customerCategory) {
@@ -702,6 +693,12 @@ async function getAppointmentsForExport(filters = {}) {
         if (qcStatus) {
             conditions.push('a.qc_status = ?');
             params.push(qcStatus);
+        }
+
+        // Diagnostic Center Filtering: Filter by center_id OR other_center_id
+        if (centerId && centerId !== '') {
+            conditions.push('(a.center_id = ? OR a.other_center_id = ?)');
+            params.push(parseInt(centerId), parseInt(centerId));
         }
 
         if (search) {
