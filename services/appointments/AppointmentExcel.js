@@ -649,7 +649,7 @@ async function getAppointmentsForExport(filters = {}) {
             rangeType = '',
             fromDate = '',
             toDate = '',
-            centerId = ''
+            centerIds = []
         } = filters;
 
         const conditions = ['a.is_deleted = 0'];  // get non deleted rows 
@@ -695,10 +695,15 @@ async function getAppointmentsForExport(filters = {}) {
             params.push(qcStatus);
         }
 
-        // Diagnostic Center Filtering: Filter by center_id OR other_center_id
-        if (centerId && centerId !== '') {
-            conditions.push('(a.center_id = ? OR a.other_center_id = ?)');
-            params.push(parseInt(centerId), parseInt(centerId));
+        // Diagnostic Center Filtering: Filter by center_id OR other_center_id (multiple centers support)
+        if (centerIds && centerIds.length > 0) {
+            const centerIdsInt = centerIds.map(id => parseInt(id)).filter(id => !isNaN(id));
+            if (centerIdsInt.length > 0) {
+                // Create placeholders for IN clause
+                const placeholders = centerIdsInt.map(() => '?').join(',');
+                conditions.push(`(a.center_id IN (${placeholders}) OR a.other_center_id IN (${placeholders}))`);
+                params.push(...centerIdsInt, ...centerIdsInt);
+            }
         }
 
         if (search) {

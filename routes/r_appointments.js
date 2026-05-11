@@ -162,8 +162,8 @@ router.get('/appointments/export',
             rangeType: req.query.rangeType || '',
             fromDate: req.query.fromDate || '',
             toDate: req.query.toDate || '',
-            // Diagnostic center filtering
-            centerId: req.query.centerId || ''
+            // Diagnostic center filtering (multiple centers)
+            centerIds: req.query.centerIds ? req.query.centerIds.split(',').filter(id => id.trim()) : []
         };
 
         logger.info('Exporting appointments', {
@@ -350,18 +350,19 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
     const fromDate = req.query.fromDate || '';
     const toDate = req.query.toDate || '';
     
-    // Diagnostic center filtering
-    const centerId = req.query.centerId || '';
+    // Diagnostic center filtering (support multiple centers)
+    const centerIds = req.query.centerIds ? req.query.centerIds.split(',').filter(id => id.trim()) : [];
 
     // If requester is a diagnostic center user, restrict to their appointments only
     const centerIdFromToken = req.user?.diagnostic_center_id || req.user?.center_id;   
     if (centerIdFromToken) {
-        const result = await service.listAppointmentsbyDiagnosticCenters({
-            page,
-            limit,
-            search,
-            centerId: centerIdFromToken,
-            listType: 'all',
+        // Use main listAppointments method with center filtering for consistent date filtering
+        const result = await service.listAppointments({ 
+            page, 
+            limit, 
+            search, 
+            sortBy, 
+            sortOrder, 
             customerCategory,
             month,
             year,
@@ -375,7 +376,7 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
             rangeType,
             fromDate,
             toDate,
-            centerId
+            centerIds: [centerIdFromToken] // Pass center ID as array for consistent filtering
         });
         return ApiResponse.paginated(res, result.data, result.pagination);
     }
@@ -400,7 +401,7 @@ router.get('/appointments', verifyToken, requirePermission('appointments.view'),
         rangeType,
         fromDate,
         toDate,
-        centerId
+        centerIds
     });
     return ApiResponse.paginated(res, result.data, result.pagination);
 }));
@@ -753,52 +754,48 @@ router.post('/appointments/UpdateIds', verifyToken, validateRequest(appointmentB
 // ============================================================================
 
 
-// Center - Get pending (pushed back) appointments
-router.get('/appointments/center/pending', verifyToken, requirePermission('appointments.view'), asyncHandler(async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 0;
-    const search = req.query.q || '';
-    console.log("Decoded USER ->", req.user);
-
-
-    // centerId comes from token (req.user)
-    const centerId = req.user.diagnostic_center_id;
-
-    if (!centerId) {
-        return ApiResponse.error(res, "Center ID missing in token", 400);
-    }
-
-    const result = await service.listCenterPendingAppointments({
-        page,
-        limit,
-        search,
-        centerId
-    });
-
-    return ApiResponse.paginated(res, result.data, result.pagination);
-}));
-
-
-// Center - Get unconfirmed appointments (to be scheduled)
 router.get('/appointments/center/unconfirmed', verifyToken, requirePermission('appointments.view'), asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 0;
     const search = req.query.q || '';
-    const centerId = req.user.center_id || parseInt(req.query.centerId);
+    const centerId = req.user.center_id || req.user.diagnostic_center_id || parseInt(req.query.centerId);
+    const sortBy = req.query.sortBy || 'id';
+    const sortOrder = req.query.sortOrder || 'DESC';
     const customerCategory = req.query.customerCategory || '';
+    
+    // Enhanced date filtering parameters
+    const dateField = req.query.dateField || 'created_at';
+    const rangeType = req.query.rangeType || '';
+    const fromDate = req.query.fromDate || '';
+    const toDate = req.query.toDate || '';
 
     if (!centerId) {
         return ApiResponse.error(res, 'Center ID is required', 400);
     }
 
-    const result = await service.listAppointmentsbyDiagnosticCenters({
-        page,
-        limit,
-        search,
-        centerId,
-        listType: 'unconfirmed',
-        customerCategory
+    // Use main listAppointments method with center filtering for consistent date filtering
+    const result = await service.listAppointments({ 
+        page, 
+        limit, 
+        search, 
+        sortBy, 
+        sortOrder, 
+        customerCategory,
+        month: '', // Legacy - not used in new filtering
+        year: '',  // Legacy - not used in new filtering
+        visitType: '',
+        status: 'unconfirmed', // Apply unconfirmed status filtering
+        medicalStatus: '',
+        qcStatus: '',
+        userId: req.user?.id,
+        userRole: req.user?.role_id,
+        dateField,
+        rangeType,
+        fromDate,
+        toDate,
+        centerIds: [centerId] // Pass center ID as array for consistent filtering
     });
+    
     return ApiResponse.paginated(res, result.data, result.pagination);
 }));
 
@@ -807,25 +804,44 @@ router.get('/appointments/center/confirmed', verifyToken, requirePermission('app
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 0;
     const search = req.query.q || '';
-    const centerId = req.user.center_id || parseInt(req.query.centerId);
+    const centerId = req.user.center_id || req.user.diagnostic_center_id || parseInt(req.query.centerId);
     const sortBy = req.query.sortBy || 'id';
     const sortOrder = req.query.sortOrder || 'DESC';
     const customerCategory = req.query.customerCategory || '';
+    
+    // Enhanced date filtering parameters
+    const dateField = req.query.dateField || 'created_at';
+    const rangeType = req.query.rangeType || '';
+    const fromDate = req.query.fromDate || '';
+    const toDate = req.query.toDate || '';
 
     if (!centerId) {
         return ApiResponse.error(res, 'Center ID is required', 400);
     }
 
-    const result = await service.listAppointmentsbyDiagnosticCenters({
-        page,
-        limit,
-        search,
-        centerId,
-        listType: 'confirmed',
-        sortBy,
-        sortOrder,
-        customerCategory
+    // Use main listAppointments method with center filtering for consistent date filtering
+    const result = await service.listAppointments({ 
+        page, 
+        limit, 
+        search, 
+        sortBy, 
+        sortOrder, 
+        customerCategory,
+        month: '', // Legacy - not used in new filtering
+        year: '',  // Legacy - not used in new filtering
+        visitType: '',
+        status: '', // Don't use simple status filter for confirmed
+        medicalStatus: 'confirmed,scheduled', // Use medical_status filter to match dashboard
+        qcStatus: '',
+        userId: req.user?.id,
+        userRole: req.user?.role_id,
+        dateField,
+        rangeType,
+        fromDate,
+        toDate,
+        centerIds: [centerId] // Pass center ID as array for consistent filtering
     });
+    
     return ApiResponse.paginated(res, result.data, result.pagination);
 }));
 
@@ -837,6 +853,12 @@ router.get('/appointments/center/report', verifyToken, requirePermission('appoin
     const sortBy = req.query.sortBy || 'id';
     const sortOrder = req.query.sortOrder || 'DESC';
     const customerCategory = req.query.customerCategory || '';
+    
+    // Enhanced date filtering parameters
+    const dateField = req.query.dateField || 'created_at';
+    const rangeType = req.query.rangeType || '';
+    const fromDate = req.query.fromDate || '';
+    const toDate = req.query.toDate || '';
 
     // Check if user is admin (no center_id or role_id indicates admin)
     const userCenterId = req.user?.center_id || req.user?.diagnostic_center_id;
@@ -845,14 +867,26 @@ router.get('/appointments/center/report', verifyToken, requirePermission('appoin
 
     if (isAdmin) {
         // Admin/Super Admin: fetch all completed appointments without center filtering
-        const result = await service.listAllConfirmedAppointments({
-            page,
-            limit,
-            search,
-            listType: 'completed',
-            sortBy,
-            sortOrder,
-            customerCategory
+        const result = await service.listAppointments({ 
+            page, 
+            limit, 
+            search, 
+            sortBy, 
+            sortOrder, 
+            customerCategory,
+            month: '', // Legacy - not used in new filtering
+            year: '',  // Legacy - not used in new filtering
+            visitType: '',
+            status: 'completed', // Apply completed status filtering
+            medicalStatus: '',
+            qcStatus: '',
+            userId: req.user?.id,
+            userRole: req.user?.role_id,
+            dateField,
+            rangeType,
+            fromDate,
+            toDate,
+            centerIds: [] // No center filtering for admin
         });
         return ApiResponse.paginated(res, result.data, result.pagination);
     }
@@ -862,15 +896,27 @@ router.get('/appointments/center/report', verifyToken, requirePermission('appoin
     const centerId = userCenterId || centerIdFromQuery;
 
     if (centerId) {
-        const result = await service.listAppointmentsbyDiagnosticCenters({
-            page,
-            limit,
-            search,
-            centerId,
-            listType: 'completed',
-            sortBy,
-            sortOrder,
-            customerCategory
+        // Use main listAppointments method with center filtering for consistent date filtering
+        const result = await service.listAppointments({ 
+            page, 
+            limit, 
+            search, 
+            sortBy, 
+            sortOrder, 
+            customerCategory,
+            month: '', // Legacy - not used in new filtering
+            year: '',  // Legacy - not used in new filtering
+            visitType: '',
+            status: 'completed', // Apply completed status filtering
+            medicalStatus: '',
+            qcStatus: '',
+            userId: req.user?.id,
+            userRole: req.user?.role_id,
+            dateField,
+            rangeType,
+            fromDate,
+            toDate,
+            centerIds: [centerId] // Pass center ID as array for consistent filtering
         });
         return ApiResponse.paginated(res, result.data, result.pagination);
     }
