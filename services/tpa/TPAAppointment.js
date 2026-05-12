@@ -381,6 +381,25 @@ class TPAAppointmentService {
                         continue;
                     }
 
+                    // Validate optional center_id
+                    if (test.center_id !== undefined && test.center_id !== null && test.center_id !== '') {
+                        if (isNaN(test.center_id) || test.center_id <= 0) {
+                            errors.push(`tests[${i}].center_id must be a valid positive number`);
+                        }
+                    }
+
+                    // Validate optional center_name
+                    if (test.center_name !== undefined && test.center_name !== null && typeof test.center_name !== 'string') {
+                        errors.push(`tests[${i}].center_name must be a string`);
+                    }
+
+                    // Validate optional visit_subtype
+                    if (test.visit_subtype !== undefined && test.visit_subtype !== null) {
+                        if (!['center', 'home'].includes(test.visit_subtype)) {
+                            errors.push(`tests[${i}].visit_subtype must be either 'center' or 'home'`);
+                        }
+                    }
+
                     validatedItems.push({
                         type: 'test',
                         id: test.test_id,
@@ -408,6 +427,25 @@ class TPAAppointmentService {
                     if (categoryCheck.length === 0) {
                         errors.push(`categories[${i}].category_id ${category.category_id} - Category not found or inactive`);
                         continue;
+                    }
+
+                    // Validate optional center_id
+                    if (category.center_id !== undefined && category.center_id !== null && category.center_id !== '') {
+                        if (isNaN(category.center_id) || category.center_id <= 0) {
+                            errors.push(`categories[${i}].center_id must be a valid positive number`);
+                        }
+                    }
+
+                    // Validate optional center_name
+                    if (category.center_name !== undefined && category.center_name !== null && typeof category.center_name !== 'string') {
+                        errors.push(`categories[${i}].center_name must be a string`);
+                    }
+
+                    // Validate optional visit_subtype
+                    if (category.visit_subtype !== undefined && category.visit_subtype !== null) {
+                        if (!['center', 'home'].includes(category.visit_subtype)) {
+                            errors.push(`categories[${i}].visit_subtype must be either 'center' or 'home'`);
+                        }
                     }
 
                     validatedItems.push({

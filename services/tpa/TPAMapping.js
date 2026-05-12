@@ -205,10 +205,10 @@ class TPAMappingService {
             }
 
             const rows = await db.query(
-                `SELECT id, center_name, center_code, short_code
+                `SELECT id, center_name, center_code
                  FROM diagnostic_centers
                  WHERE id = ?
-                 AND is_active = TRUE AND is_deleted = 0
+                 AND is_active = 0 AND is_deleted = 0
                  LIMIT 1`,
                 [Number(centerId)]
             );
@@ -231,12 +231,12 @@ class TPAMappingService {
     static async findDiagnosticCenter(centerName) {
         try {
             const rows = await db.query(
-                `SELECT id, center_name, center_code, short_code
+                `SELECT id, center_name, center_code
                  FROM diagnostic_centers
-                 WHERE (center_name = ? OR center_code = ? OR short_code = ?)
-                 AND is_active = TRUE AND is_deleted = 0
+                 WHERE (center_name = ? OR center_code = ?)
+                 AND is_active = 0 AND is_deleted = 0
                  LIMIT 1`,
-                [centerName, centerName, centerName]
+                [centerName, centerName]
             );
 
             if (rows.length === 0) {
@@ -256,7 +256,7 @@ class TPAMappingService {
      */
     static async getDiagnosticCenters({ search = '', pincode = '' } = {}) {
         try {
-            const conditions = ['dc.is_deleted = 0'];
+            const conditions = ['dc.is_deleted = 0', 'dc.is_active = 0'];
             const params = [];
 
             if (pincode) {
@@ -417,14 +417,63 @@ class TPAMappingService {
                     );
                 }
 
-                for (const testId of requestedTestIds) {
+                for (const test of tpaData.tests) {
+                    const testId = Number(test.test_id);
+                    if (!Number.isInteger(testId) || testId <= 0) continue;
+
                     const mappedTest = mappedTests.get(testId);
-                    selected_items.push({
+                    const item = {
                         id: testId,
                         type: 'test',
                         name: mappedTest.test_name,
                         rate: Number(mappedTest.rate) || 0
-                    });
+                    };
+
+                    // Handle optional per-test center assignment (by ID or name)
+                    if (test.center_id !== undefined && test.center_id !== null && test.center_id !== '') {
+                        // Validate that test center_id must match either appointment center_id or other_center_id
+                        if (mappedData.center_id && test.center_id !== mappedData.center_id && 
+                            (!mappedData.other_center_id || test.center_id !== mappedData.other_center_id)) {
+                            throw this.createValidationError(
+                                `Test center_id ${test.center_id} must match either appointment center_id (${mappedData.center_id}) or other_center_id (${mappedData.other_center_id})`
+                            );
+                        }
+                        
+                        const center = await this.findDiagnosticCenterById(test.center_id);
+                        if (center) {
+                            item.assigned_center_id = center.id;
+                        } else {
+                            logger.warn('Test-level Diagnostic Center not found by ID', {
+                                testId,
+                                centerId: test.center_id
+                            });
+                        }
+                    } else if (test.center_name) {
+                        const center = await this.findDiagnosticCenter(test.center_name);
+                        if (center) {
+                            // Validate that test center must match either appointment center_id or other_center_id
+                            if (mappedData.center_id && center.id !== mappedData.center_id && 
+                                (!mappedData.other_center_id || center.id !== mappedData.other_center_id)) {
+                                throw this.createValidationError(
+                                    `Test center '${test.center_name}' (ID: ${center.id}) must match either appointment center_id (${mappedData.center_id}) or other_center_id (${mappedData.other_center_id})`
+                                );
+                            }
+                            
+                            item.assigned_center_id = center.id;
+                        } else {
+                            logger.warn('Test-level Diagnostic Center not found by name', {
+                                testId,
+                                centerName: test.center_name
+                            });
+                        }
+                    }
+
+                    // Handle optional per-test visit subtype
+                    if (test.visit_subtype && ['center', 'home'].includes(test.visit_subtype)) {
+                        item.visit_subtype = test.visit_subtype;
+                    }
+
+                    selected_items.push(item);
                 }
             }
             
@@ -443,14 +492,63 @@ class TPAMappingService {
                     );
                 }
 
-                for (const categoryId of requestedCategoryIds) {
+                for (const category of tpaData.categories) {
+                    const categoryId = Number(category.category_id);
+                    if (!Number.isInteger(categoryId) || categoryId <= 0) continue;
+
                     const mappedCategory = mappedCategories.get(categoryId);
-                    selected_items.push({
+                    const item = {
                         id: categoryId,
                         type: 'category',
                         name: mappedCategory.category_name,
                         rate: Number(mappedCategory.rate) || 0
-                    });
+                    };
+
+                    // Handle optional per-category center assignment (by ID or name)
+                    if (category.center_id !== undefined && category.center_id !== null && category.center_id !== '') {
+                        // Validate that category center_id must match either appointment center_id or other_center_id
+                        if (mappedData.center_id && category.center_id !== mappedData.center_id && 
+                            (!mappedData.other_center_id || category.center_id !== mappedData.other_center_id)) {
+                            throw this.createValidationError(
+                                `Category center_id ${category.center_id} must match either appointment center_id (${mappedData.center_id}) or other_center_id (${mappedData.other_center_id})`
+                            );
+                        }
+                        
+                        const center = await this.findDiagnosticCenterById(category.center_id);
+                        if (center) {
+                            item.assigned_center_id = center.id;
+                        } else {
+                            logger.warn('Category-level Diagnostic Center not found by ID', {
+                                categoryId,
+                                centerId: category.center_id
+                            });
+                        }
+                    } else if (category.center_name) {
+                        const center = await this.findDiagnosticCenter(category.center_name);
+                        if (center) {
+                            // Validate that category center must match either appointment center_id or other_center_id
+                            if (mappedData.center_id && center.id !== mappedData.center_id && 
+                                (!mappedData.other_center_id || center.id !== mappedData.other_center_id)) {
+                                throw this.createValidationError(
+                                    `Category center '${category.center_name}' (ID: ${center.id}) must match either appointment center_id (${mappedData.center_id}) or other_center_id (${mappedData.other_center_id})`
+                                );
+                            }
+                            
+                            item.assigned_center_id = center.id;
+                        } else {
+                            logger.warn('Category-level Diagnostic Center not found by name', {
+                                categoryId,
+                                centerName: category.center_name
+                            });
+                        }
+                    }
+
+                    // Handle optional per-category visit subtype
+                    if (category.visit_subtype && ['center', 'home'].includes(category.visit_subtype)) {
+                        item.visit_subtype = category.visit_subtype;
+                    }
+
+                    selected_items.push(item);
                 }
             }
             
