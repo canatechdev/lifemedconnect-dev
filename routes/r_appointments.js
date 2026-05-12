@@ -425,6 +425,34 @@ router.get('/appointments/admin/pending', verifyToken, requirePermission('appoin
     return ApiResponse.paginated(res, result.data, result.pagination);
 }));
 
+// Center - Get pending (pushed back) appointments
+router.get('/appointments/center/pending', verifyToken, requirePermission('appointments.view'), asyncHandler(async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.q || '';
+    const sortBy = req.query.sortBy || 'id';
+    const sortOrder = req.query.sortOrder || 'DESC';
+    const customerCategory = req.query.customerCategory || '';
+    console.log("Decoded USER ->", req.user);
+
+    // centerId comes from token (req.user)
+    const centerId = req.user.diagnostic_center_id;
+
+    if (!centerId) {
+        return ApiResponse.error(res, "Center ID missing in token", 400);
+    }
+
+    const result = await service.listCenterPendingAppointments({
+        page,
+        limit,
+        search,
+        centerId,
+        customerCategory
+    });
+
+    return ApiResponse.paginated(res, result.data, result.pagination);
+}));
+
 // Admin - List all confirmed appointments
 router.get('/appointments/confirmed', verifyToken, requirePermission('appointments.view'), asyncHandler(async (req, res) => {
     const page = parseInt(req.query.page) || 1;

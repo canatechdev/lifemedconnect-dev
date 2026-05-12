@@ -196,6 +196,36 @@ class TPAMappingService {
     }
 
     /**
+     * Find Diagnostic Center by ID
+     */
+    static async findDiagnosticCenterById(centerId) {
+        try {
+            if (!centerId || Number.isNaN(Number(centerId))) {
+                return null;
+            }
+
+            const rows = await db.query(
+                `SELECT id, center_name, center_code, short_code
+                 FROM diagnostic_centers
+                 WHERE id = ?
+                 AND is_active = TRUE AND is_deleted = 0
+                 LIMIT 1`,
+                [Number(centerId)]
+            );
+
+            if (rows.length === 0) {
+                logger.warn('Diagnostic Center not found by ID', { centerId });
+                return null;
+            }
+
+            return rows[0];
+        } catch (error) {
+            logger.error('Error finding Diagnostic Center by ID', { centerId, error: error.message });
+            throw error;
+        }
+    }
+
+    /**
      * Find Diagnostic Center by name
      */
     static async findDiagnosticCenter(centerName) {
@@ -217,6 +247,59 @@ class TPAMappingService {
             return rows[0];
         } catch (error) {
             logger.error('Error finding Diagnostic Center', { centerName, error: error.message });
+            throw error;
+        }
+    }
+
+    /**
+     * Search diagnostic centers for TPA integrations
+     */
+    static async getDiagnosticCenters({ search = '', pincode = '' } = {}) {
+        try {
+            const conditions = ['dc.is_deleted = 0'];
+            const params = [];
+
+            if (pincode) {
+                conditions.push('dc.pincode LIKE ?');
+                params.push(`%${pincode}%`);
+            }
+
+            if (search) {
+                conditions.push(`(
+                    dc.center_name LIKE ? OR
+                    dc.owner_name LIKE ? OR
+                    dc.address LIKE ? OR
+                    dc.city LIKE ? OR
+                    dc.state LIKE ? OR
+                    dc.country LIKE ? OR
+                    dc.pincode LIKE ? OR
+                    dc.center_code LIKE ?
+                )`);
+                const like = `%${search}%`;
+                params.push(like, like, like, like, like, like, like, like);
+            }
+
+            const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+            const rows = await db.query(
+                `SELECT 
+                    dc.id,
+                    dc.center_name,
+                    dc.address,
+                    dc.owner_name,
+                    dc.city,
+                    dc.state,
+                    dc.pincode,
+                    dc.country
+                 FROM diagnostic_centers dc
+                 ${whereClause}
+                 ORDER BY dc.center_name ASC`,
+                params
+            );
+
+            return rows;
+        } catch (error) {
+            logger.error('Error getting diagnostic centers for TPA', { error: error.message, search, pincode });
             throw error;
         }
     }
@@ -272,13 +355,42 @@ class TPAMappingService {
             }
 
             // Map diagnostic center if provided
-            if (tpaData.center_name) {
+            if (tpaData.center_id !== undefined && tpaData.center_id !== null && tpaData.center_id !== '') {
+                const center = await this.findDiagnosticCenterById(tpaData.center_id);
+                if (center) {
+                    mappedData.center_id = center.id;
+                } else {
+                    logger.warn('Diagnostic Center not found, proceeding without center_id', {
+                        centerId: tpaData.center_id
+                    });
+                }
+            } else if (tpaData.center_name) {
                 const center = await this.findDiagnosticCenter(tpaData.center_name);
                 if (center) {
                     mappedData.center_id = center.id;
                 } else {
                     logger.warn('Diagnostic Center not found, proceeding without center_id', {
                         centerName: tpaData.center_name
+                    });
+                }
+            }
+
+            if (tpaData.other_center_id !== undefined && tpaData.other_center_id !== null && tpaData.other_center_id !== '') {
+                const otherCenter = await this.findDiagnosticCenterById(tpaData.other_center_id);
+                if (otherCenter) {
+                    mappedData.other_center_id = otherCenter.id;
+                } else {
+                    logger.warn('Other Diagnostic Center not found, proceeding without other_center_id', {
+                        otherCenterId: tpaData.other_center_id
+                    });
+                }
+            } else if (tpaData.other_center_name) {
+                const otherCenter = await this.findDiagnosticCenter(tpaData.other_center_name);
+                if (otherCenter) {
+                    mappedData.other_center_id = otherCenter.id;
+                } else {
+                    logger.warn('Other Diagnostic Center not found, proceeding without other_center_id', {
+                        otherCenterName: tpaData.other_center_name
                     });
                 }
             }

@@ -98,6 +98,40 @@ router.get('/insurers/:id', authenticateTPA, async (req, res) => {
 });
 
 /**
+ * Get diagnostic centers for TPA integrations
+ * Supports simple search and pincode filtering without pagination
+ */
+router.get('/centers', authenticateTPA, async (req, res) => {
+    try {
+        const search = (req.query.search || req.query.q || '').trim();
+        const pincode = (req.query.pincode || '').trim();
+
+        const centers = await TPAMappingService.getDiagnosticCenters({ search, pincode });
+
+        res.json({
+            success: true,
+            message: 'Diagnostic centers retrieved successfully',
+            data: centers.map((center) => ({
+                id: center.id,
+                center_name: center.center_name,
+                address: center.address,
+                owner_name: center.owner_name,
+                city: center.city,
+                state: center.state,
+                pincode: center.pincode,
+                country: center.country
+            }))
+        });
+    } catch (error) {
+        logger.error('Error getting diagnostic centers', { error: error.message });
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get diagnostic centers'
+        });
+    }
+});
+
+/**
  * Get tests and categories by insurer ID (TPA auto-detected)
  */
 router.get('/tests-categories/:insurerId', authenticateTPA, async (req, res) => {
